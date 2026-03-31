@@ -16,7 +16,6 @@ def with_backoff(
     base_delay: float = 1.0,
     max_delay: float = 60.0,
     jitter: bool = True,
-    verbose: bool = False,
 ):
     """
     Decorator that retries a function with exponential backoff.
@@ -41,16 +40,10 @@ def with_backoff(
                     if jitter:
                         delay *= random.uniform(0.5, 1.5)
 
-                    msg = (
-                        f"[backoff] {func.__name__} rate_limited "
-                        f"(attempt {attempt + 1}/{max_retries}). "
-                        f"Retrying in {delay:.1f}s..."
+                    logger.warning(
+                        "[backoff] %s rate limited (attempt %d/%d). Retrying in %.1fs...",
+                        func.__name__, attempt + 1, max_retries, delay,
                     )
-                    
-                    if verbose:
-                        print(msg)
-                    else:
-                        logger.warning(msg)
 
                     time.sleep(delay)
             return wrapper

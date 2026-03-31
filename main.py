@@ -2,11 +2,13 @@ import os
 import json
 import argparse
 import prompts
+import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from functions.call_function import available_functions, call_function
+from utils.retry import with_backoff
 
 
 #
@@ -71,6 +73,11 @@ class RunLogger:
 
 def main():
     args = parse_arguments()
+    logging.basicConfig(            # no-op if the root logger already has handlers, potential issue
+        filename="logs/agent.log",  # if a testing framework or library configures logging
+        level=logging.WARNING,      # before main() runs
+        format="%(asctime)s %(name)s %(levelname)s %(messages)s",
+    )
 
     load_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -119,19 +126,38 @@ def parse_arguments():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     return parser.parse_args()
 
+@with_backoff(max_retries=5, base_delay=1.0)
+def _call_api(client, model, config, contents):
+    return client.models.generate_content(
+        model=model,
+        config=config,
+        contents=contents,
+    )
+
 def generate_content(client, messages, verbose, logger: RunLogger, iteration: int):
     """
     Returns (function_response_parts | None, is_done).
     is_done=True when the model produces a text-only final answer.
     """
-    response = client.models.generate_content(
-        model="gemini-2.5-flash", 
+    # response = client.models.generate_content(
+    #     model="gemini-2.5-flash", 
+    #     config=types.GenerateContentConfig(
+    #         tools=[available_functions],
+    #         system_instruction=prompts.system_prompt
+    #     ),
+    #     contents=messages,
+    # )
+
+    response = _call_api(
+        client,
+        model="gemini-2.5-flash",
         config=types.GenerateContentConfig(
             tools=[available_functions],
             system_instruction=prompts.system_prompt
         ),
         contents=messages,
     )
+
     
     if not response.usage_metadata:
         raise RuntimeError("Gemini API response appears to be malformed")

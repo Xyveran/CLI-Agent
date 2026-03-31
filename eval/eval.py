@@ -22,7 +22,7 @@ import sys
 import json
 import time
 import argparse
-import importlib.util
+from utils.retry import with_backoff
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -114,7 +114,8 @@ class AgentRunner:
         final_output = ""
 
         for _ in range(10):
-            response = client.models.generate_content(
+            response = _call_api(
+                client,
                 model="gemini-2.5-flash",
                 config=types.GenerateContentConfig(
                     tools=[self._available_functions],
@@ -122,6 +123,15 @@ class AgentRunner:
                 ),
                 contents=messages,
             )
+
+            # response = client.models.generate_content(
+            #     model="gemini-2.5-flash",
+            #     config=types.GenerateContentConfig(
+            #         tools=[self._available_functions],
+            #         system_instruction=self._system_prompt,
+            #     ),
+            #     contents=messages,
+            # )
 
             if response.usage_metadata:
                 total_prompt_tokens += response.usage_metadata.prompt_token_count or 0
@@ -154,6 +164,12 @@ class AgentRunner:
             "response_tokens": total_response_tokens,
         }
     
+@with_backoff(max_retries=5, base_delay=2.0) # slightly longer base for eval runs
+def _call_api(client, model, config, contents):
+    return client.models.generate_content(
+        model=model, config=config, contents=contents,
+    )
+
 #
 # Evaluator
 #
@@ -320,11 +336,14 @@ def main() -> None:
     runner = AgentRunner(verbose=args.verbose)
     results: list[ScenarioResult] = []
 
-    for scenario in scenario:
+    for i, scenario in enumerate(scenarios):
         print(f"Running [{scenario.id}] {scenario.description} ...", end=" ", flush=True)
         result = evaluate_scenario(scenario, runner, dry_run=args.dry_run)
         results.append(result)
         print("PASS" if result.passed else "FAIL")
+
+        if i < len(scenarios) - 1:
+            time.sleep(1.0) # pacing between scenarios
 
     print_report(results)
 
