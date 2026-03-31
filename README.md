@@ -28,31 +28,54 @@ python main.py "Summarize every Python file in this project and write the summar
 
 ### Architecture
 
-┌─────────────────────────────────────────────────────────────┐
-│                        CLI  (main.py)                       │
-│  argparse → user_prompt + --verbose flag                    │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ messages[] (full history each turn)
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Google Gemini 2.5 Flash  (LLM)                 │
-│  system_instruction + tool schemas → FunctionCall | text    │
-└───────┬───────────────────────────────────────┬─────────────┘
-        │ FunctionCall                          │ text (final answer)
-        ▼                                       ▼
-┌───────────────────────┐             ┌─────────────────────┐
-│   Tool Dispatcher     │             │   RunLogger (JSON)  │
-│   call_function.py    │             │   logs/run_*.json   │
-│                       │             └─────────────────────┘
-│  ┌─────────────────┐  │
-│  │ get_files_info  │  │  path-traversal guard
-│  │ get_file_content│  │  ──────────────────►  os.path.commonpath()
-│  │ run_python_file │  │  subprocess sandbox   timeout=30s
-│  │ write_file      │  │  try/except wrapper   structured error strings
-│  └─────────────────┘  │
-└───────────────────────┘
-        │ FunctionResponse (JSON)
-        └──────────────────────► back into messages[] → next LLM turn
+```mermaid
+flowchart TD
+    A["CLI — main.py
+    argparse · user_prompt · --verbose"]
+
+    B["Gemini 2.5 Flash
+    system_instruction + tool schemas"]
+
+    C{"Response type?"}
+
+    D["Final text answer
+    print to stdout"]
+
+    E["Tool Dispatcher
+    call_function.py"]
+
+    F1["get_files_info"]
+    F2["get_file_content"]
+    F3["run_python_file"]
+    F4["write_file"]
+
+    G["Path guard
+    os.path.commonpath()"]
+
+    H["Subprocess sandbox
+    timeout=30s · stdout/stderr"]
+
+    I["FunctionResponse
+    structured JSON result"]
+
+    J["RunLogger
+    logs/run_timestamp.json"]
+
+    K["Append to messages[]
+    full history preserved"]
+
+    A -->|"user prompt"| B
+    B --> C
+    C -->|"text"| D
+    C -->|"FunctionCall"| E
+    E --> F1 & F2 & F3 & F4
+    F1 & F2 & F4 --> G
+    F3 --> H
+    G & H --> I
+    I --> J
+    I --> K
+    K -->|"next iteration ≤ 10"| B
+```
 
 The agent loop runs until either the model emits a plain-text final answer (task complete)
 or the 10-iteration cap is reached. Every run is logged to logs/run_<timestamp>.json.
@@ -154,12 +177,16 @@ Each scenario defines:
 #### Sample output:
 
 > =================================================================
->   CLI AGENT — EVALUATION REPORT
+> 
+>   CLI AGENT - EVALUATION REPORT
+> 
 > =================================================================
+> 
 >   Scenarios run   : 7
 >   Passed          : 6  |  Failed: 1
 >   Completion rate : 85.7%
 >   Avg effort saved: 72.4%
+> 
 > =================================================================
 > 
 >   [S5] ✓ PASS  —  Multi-step: inspect, run, diagnose failing test
@@ -210,25 +237,62 @@ arguments, and what they returned.
 
 ### Project Structure
 
-cli-agent/
-├── main.py                  # agent loop, CLI entrypoint, run logger
-├── prompts.py               # system prompt (task decomposition + tool-use rules)
-├── config.py                # WORKING_DIR, MAX_CHARS constants
-├── pyproject.toml
-│
-├── functions/
-│   ├── call_function.py     # tool dispatcher + function registry
-│   ├── get_files_info.py    # list directory contents
-│   ├── get_file_content.py  # read file with character cap
-│   ├── run_python_file.py   # sandboxed subprocess execution
-│   └── write_file.py        # safe file write / overwrite
-│
-├── eval/
-│   ├── scenarios.py         # 7 benchmark scenarios with validators
-│   └── eval.py              # runner, metrics, JSON report export
-│
-├── logs/                    # auto-created; one JSON file per run
-└── calculator/              # sample project the agent operates on
+```mermaid
+flowchart LR
+    ROOT["cli-agent/"]
+
+    ROOT --> MAIN["main.py
+    agent loop · CLI · RunLogger"]
+    ROOT --> PROMPTS["prompts.py
+    system instruction"]
+    ROOT --> CONFIG["config.py
+    WORKING_DIR · MAX_CHARS"]
+    ROOT --> PYPROJECT["pyproject.toml
+    deps · uv"]
+
+    ROOT --> FN["functions/"]
+    FN --> CF["call_function.py
+    dispatcher · registry"]
+    FN --> GFI["get_files_info.py
+    list directory"]
+    FN --> GFC["get_file_content.py
+    read · truncate at 10k chars"]
+    FN --> RPF["run_python_file.py
+    subprocess · timeout 30s"]
+    FN --> WF["write_file.py
+    write · overwrite"]
+
+    ROOT --> EV["eval/"]
+    EV --> SC["scenarios.py
+    7 benchmark tasks · validators"]
+    EV --> EL["eval.py
+    runner · metrics · JSON report"]
+
+    ROOT --> LG["logs/
+    run_timestamp.json per run"]
+    ROOT --> CA["calculator/
+    sample project · agent target"]
+
+    style ROOT fill:#EEEDFE,stroke:#AFA9EC,color:#26215C
+    style MAIN fill:#EEEDFE,stroke:#AFA9EC,color:#26215C
+    style PROMPTS fill:#EEEDFE,stroke:#AFA9EC,color:#26215C
+    style CONFIG fill:#EEEDFE,stroke:#AFA9EC,color:#26215C
+    style PYPROJECT fill:#EEEDFE,stroke:#AFA9EC,color:#26215C
+
+    style FN fill:#E1F5EE,stroke:#5DCAA5,color:#085041
+    style CF fill:#E1F5EE,stroke:#5DCAA5,color:#085041
+    style GFI fill:#E1F5EE,stroke:#5DCAA5,color:#085041
+    style GFC fill:#E1F5EE,stroke:#5DCAA5,color:#085041
+    style RPF fill:#E1F5EE,stroke:#5DCAA5,color:#085041
+    style WF fill:#E1F5EE,stroke:#5DCAA5,color:#085041
+
+    style EV fill:#FAEEDA,stroke:#EF9F27,color:#633806
+    style SC fill:#FAEEDA,stroke:#EF9F27,color:#633806
+    style EL fill:#FAEEDA,stroke:#EF9F27,color:#633806
+
+    style LG fill:#F1EFE8,stroke:#B4B2A9,color:#444441
+    style CA fill:#F1EFE8,stroke:#B4B2A9,color:#444441
+```
 
 ### Getting Started
 
