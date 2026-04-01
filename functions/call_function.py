@@ -72,6 +72,10 @@ def partition_calls(function_calls):
     parallel, sequential = [], []
 
     for i, fc in function_calls:
+        if fc.name == "run_python_file":    # Special case of running files.
+            sequential.append((i, fc))      # Conservative choice to delegate them to sequential to
+            continue                        # avoid non-deterministic and context-dependent bugs.
+                                            # e.g. cascading script dependencies, or shared output files
         args = dict(fc.args or {})
         path = args.get("file_path") or args.get("directory")
         is_write = fc.name == "write_file"

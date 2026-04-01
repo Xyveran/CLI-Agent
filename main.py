@@ -3,6 +3,7 @@ import json
 import argparse
 import prompts
 import logging
+import threading
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google import genai
@@ -10,6 +11,8 @@ from google.genai import types
 from functions.call_function import available_functions, call_function, partition_calls
 from utils.retry import with_backoff
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+_subprocess_semaphore = threading.Semaphore(2)
 
 #
 # Structured run logger
@@ -136,7 +139,11 @@ def _call_api(client, model, config, contents):
 
 # wrapper for error handling with the ThreadPoolExecutor
 def _call_and_validate(fc, verbose):
-    response = call_function(fc, verbose)
+    if fc.name == "run_python_file":
+        with _subprocess_semaphore:
+            response = call_function(fc, verbose)
+    else:
+        response = call_function(fc, verbose)
 
     if not response.parts:
         raise Exception("Call function parts list is empty")
