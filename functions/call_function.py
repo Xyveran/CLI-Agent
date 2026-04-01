@@ -61,3 +61,28 @@ def call_function(function_call: types.FunctionCall, verbose=False):
             )
         ],
     )
+
+# path-overlap classifier, determine if function calls are safe to parallelize
+def partition_calls(function_calls):
+    """
+    Returns (parallel_group, must_sequence) based on file path overlap.
+    Each list holds tuples of (call_order, function_call).
+    """
+    write_paths = set()
+    parallel, sequential = [], []
+
+    for i, fc in function_calls:
+        args = dict(fc.args or {})
+        path = args.get("file_path") or args.get("directory")
+        is_write = fc.name == "write_file"
+
+        if is_write and path in write_paths:
+            sequential.append((i, fc))   # same file written twice
+        elif path in write_paths:
+            sequential.append((i, fc))   # reading a file being written
+        else:
+            parallel.append((i, fc))
+            if is_write and path:
+                write_paths.add(path)
+
+    return parallel, sequential
