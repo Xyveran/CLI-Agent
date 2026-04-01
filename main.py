@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from functions.call_function import available_functions, call_function
+from functions.call_function import available_functions, call_function, partition_calls
 from utils.retry import with_backoff
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 #
 # Structured run logger
@@ -134,19 +134,24 @@ def _call_api(client, model, config, contents):
         contents=contents,
     )
 
+# wrapper for error handling with the ThreadPoolExecutor
+def _call_and_validate(fc, verbose):
+    response = call_function(fc, verbose)
+
+    if not response.parts:
+        raise Exception("Call function parts list is empty")
+    if not response.parts[0].function_response:
+        raise Exception("No function response object returned")
+    if not response.parts[0].function_response.response:
+        raise Exception("No result from function call")
+    
+    return response
+
 def generate_content(client, messages, verbose, logger: RunLogger, iteration: int):
     """
     Returns (function_response_parts | None, is_done).
     is_done=True when the model produces a text-only final answer.
     """
-    # response = client.models.generate_content(
-    #     model="gemini-2.5-flash", 
-    #     config=types.GenerateContentConfig(
-    #         tools=[available_functions],
-    #         system_instruction=prompts.system_prompt
-    #     ),
-    #     contents=messages,
-    # )
 
     response = _call_api(
         client,
@@ -157,7 +162,6 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
         ),
         contents=messages,
     )
-
     
     if not response.usage_metadata:
         raise RuntimeError("Gemini API response appears to be malformed")
@@ -176,38 +180,75 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
         print(response.text)
         return None, True # done, model gave a final text answer
     
+    parallel_calls, sequential_calls = partition_calls(response.function_calls)
+
+    all_indexed = []
+
+    with ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(_call_and_validate, fc, verbose): i
+            for i, fc in parallel_calls
+        }
+        
+        for future in as_completed(futures):
+            try:
+                all_indexed.append((futures[future], future.result()))   # errors in threads re-raised at
+            except Exception:                                            # future.result()
+                for f in future:
+                    f.cancel()  # explicitly cancel in-flight future when exceptions raise
+                raise
+
+    for i, fc in sequential_calls:
+        all_indexed.append((i, _call_and_validate(fc, verbose)))
+
+    function_results = [r for _, r in sorted(all_indexed)]
+
+    # Build logging data after sorting. Single thread, correct order, no rc
     step_tool_calls = []
-    function_results = []
-
-    for function_call in response.function_calls:
-        
-        function_response = call_function(function_call, verbose)
-
-        if not function_response.parts:
-            raise Exception("Call function parts list is empty")
-
-        if not function_response.parts[0].function_response:
-            raise Exception("No function response object returned")
-        
-        if not function_response.parts[0].function_response.response:
-            raise Exception("No result from function call")
-        
-        raw_result = function_response.parts[0].function_response.response
-        result_preview = str(raw_result)[:300]
+    for i, fc in enumerate(response.function_calls):
+        raw_result = function_results[i].parts[0].function_response.response
 
         step_tool_calls.append({
-            "name": function_call.name,
-            "args": dict(function_call.args or {}),
-            "result_preview": result_preview,
+            "name": fc.name,
+            "args": dict(fc.args or {}),
+            "result_preview": str(raw_result)[:300],
         })
 
         if verbose:
             print(f"-> {raw_result}")
-
-        function_results.append(function_response)
-
+    
     logger.log_step(iteration, step_tool_calls)
     return function_results, False # not done yet
+
+    # for function_call in response.function_calls:
+        
+    #     function_response = call_function(function_call, verbose)
+
+    #     if not function_response.parts:
+    #         raise Exception("Call function parts list is empty")
+
+    #     if not function_response.parts[0].function_response:
+    #         raise Exception("No function response object returned")
+        
+    #     if not function_response.parts[0].function_response.response:
+    #         raise Exception("No result from function call")
+        
+    #     raw_result = function_response.parts[0].function_response.response
+    #     result_preview = str(raw_result)[:300]
+
+    #     step_tool_calls.append({
+    #         "name": function_call.name,
+    #         "args": dict(function_call.args or {}),
+    #         "result_preview": result_preview,
+    #     })
+
+    #     if verbose:
+    #         print(f"-> {raw_result}")
+
+    #     function_results.append(function_response)
+
+    # logger.log_step(iteration, step_tool_calls)
+    # return function_results, False # not done yet
 
 
 if __name__ == "__main__":
