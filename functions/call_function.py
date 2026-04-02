@@ -3,7 +3,6 @@ from .get_file_content import schema_get_file_content, get_file_content
 from .run_python_file import schema_run_python_file, run_python_file
 from .write_file import schema_write_file, write_file
 from config import WORKING_DIR
-from google import genai
 from google.genai import types
 
 
@@ -71,7 +70,7 @@ def partition_calls(function_calls):
     write_paths = set()
     parallel, sequential = [], []
 
-    for i, fc in function_calls:
+    for i, fc in enumerate(function_calls):
         if fc.name == "run_python_file":    # Special case of running files.
             sequential.append((i, fc))      # Conservative choice to delegate them to sequential to
             continue                        # avoid non-deterministic and context-dependent bugs.

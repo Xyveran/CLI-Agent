@@ -84,7 +84,7 @@ def main():
     logging.basicConfig(            # no-op if the root logger already has handlers, potential issue
         filename="logs/agent.log",  # if a testing framework or library configures logging
         level=logging.WARNING,      # before main() runs
-        format="%(asctime)s %(name)s %(levelname)s %(messages)s",
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
     load_dotenv()
@@ -119,7 +119,7 @@ def main():
             completed = True
             break
 
-        if function_responses:
+        if function_responses is not None:
             messages.append(types.Content(role="user", parts=function_responses))
 
     logger.finish(completed)
@@ -206,7 +206,7 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
             try:
                 all_indexed.append((futures[future], future.result()))   # errors in threads re-raised at
             except Exception:                                            # future.result()
-                for f in future:
+                for f in futures:
                     f.cancel()  # explicitly cancel in-flight future when exceptions raise
                 raise
 
@@ -231,37 +231,6 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
     
     logger.log_step(iteration, step_tool_calls)
     return function_results, False # not done yet
-
-    # for function_call in response.function_calls:
-        
-    #     function_response = call_function(function_call, verbose)
-
-    #     if not function_response.parts:
-    #         raise Exception("Call function parts list is empty")
-
-    #     if not function_response.parts[0].function_response:
-    #         raise Exception("No function response object returned")
-        
-    #     if not function_response.parts[0].function_response.response:
-    #         raise Exception("No result from function call")
-        
-    #     raw_result = function_response.parts[0].function_response.response
-    #     result_preview = str(raw_result)[:300]
-
-    #     step_tool_calls.append({
-    #         "name": function_call.name,
-    #         "args": dict(function_call.args or {}),
-    #         "result_preview": result_preview,
-    #     })
-
-    #     if verbose:
-    #         print(f"-> {raw_result}")
-
-    #     function_results.append(function_response)
-
-    # logger.log_step(iteration, step_tool_calls)
-    # return function_results, False # not done yet
-
 
 if __name__ == "__main__":
     main()
