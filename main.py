@@ -35,6 +35,7 @@ class RunLogger:
         os.makedirs(log_dir, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._path = os.path.join(log_dir, f"run_{ts}.json")
+        self._lock = threading.Lock()
         self._record: dict = {
             "timestamp": ts,
             "prompt": "",
@@ -47,24 +48,28 @@ class RunLogger:
         }
 
     def set_prompt(self, prompt: str) -> None:
-        self._record["prompt"] = prompt
+        with self._lock:
+            self._record["prompt"] = prompt
 
     def log_step(self, iteration: int, tool_calls: list[dict]) -> None:
-        self._record["steps"].append({
-            "iteration": iteration,
-            "tool_calls": tool_calls,
-        })
-        self._record["iterations"] = iteration
-        self._record["total_tool_calls"] += len(tool_calls)
+        with self._lock:
+            self._record["steps"].append({
+                "iteration": iteration,
+                "tool_calls": tool_calls,
+            })
+            self._record["iterations"] = iteration
+            self._record["total_tool_calls"] += len(tool_calls)
 
     def log_tokens(self, prompt_tokens: int, response_tokens: int) -> None:
-        self._record["total_prompt_tokens"] += prompt_tokens or 0
-        self._record["total_response_tokens"] += response_tokens or 0
+        with self._lock:
+            self._record["total_prompt_tokens"] += prompt_tokens or 0
+            self._record["total_response_tokens"] += response_tokens or 0
 
     def finish(self, completed: bool) -> None:
-        self._record["completed"] = completed
-        with open(self._path, "w") as f:
-            json.dump(self._record, f, indent=2)
+        with self._lock:
+            self._record["completed"] = completed
+            with open(self._path, "w") as f:
+                json.dump(self._record, f, indent=2)
 
     @property
     def path(self) -> str:

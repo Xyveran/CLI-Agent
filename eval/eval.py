@@ -21,7 +21,9 @@ import os
 import sys
 import json
 import time
+import threading
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.retry import with_backoff
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -36,6 +38,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from eval.scenarios import SCENARIOS, Scenario
+
+#
+# Subprocess concurrency cap, shared across all calls within a run
+#
+
+_subprocess_semaphore = threading.Semaphore(2)
 
 #
 # Result dataclass
@@ -55,6 +63,66 @@ class ScenarioResult:
     response_tokens: int
     final_output: str
     failure_reason: Optional[str] = None
+
+#
+# Path-overlap classifier
+#
+
+def _partition_calls(function_calls):
+    """
+    Splits function_calls into (parallel, sequential) groups.
+    
+    Sequential group contains:
+        - Any run_python_file call (opaque filesystem access) 
+        - Any write where the target path was already seen as a write target
+        - Any read where the target path is already a pending write target
+        
+    Returns a list of (original_indrx, fc) tuples for both groups so that
+    results can be reassembled in original order after execution.
+    """
+    write_paths = set()
+    parallel, sequential = [], []
+ 
+    for i, fc in enumerate(function_calls):
+        if fc.name == "run_python_file":
+            sequential.append((i, fc))
+            continue
+ 
+        args = dict(fc.args or {})
+        path = args.get("file_path") or args.get("directory")
+        is_write = fc.name == "write_file"
+ 
+        if path in write_paths:
+            sequential.append((i, fc))
+        else:
+            parallel.append((i, fc))
+            if is_write and path:
+                write_paths.add(path)
+ 
+    return parallel, sequential
+
+#
+# Validated call wrapper
+#
+
+def _call_and_validate(fc, verbose):
+    """Call a single function and validate the response structure."""
+    from functions.call_function import call_function
+ 
+    if fc.name == "run_python_file":
+        with _subprocess_semaphore:
+            response = call_function(fc, verbose)
+    else:
+        response = call_function(fc, verbose)
+ 
+    if not response.parts:
+        raise Exception(f"Call function parts list is empty for {fc.name}")
+    if not response.parts[0].function_response:
+        raise Exception(f"No function response object returned for {fc.name}")
+    if not response.parts[0].function_response.response:
+        raise Exception(f"No result from function call for {fc.name}")
+ 
+    return response
 
 #
 # Agent runner (wraps main.generate_content agentic loop)
@@ -124,15 +192,6 @@ class AgentRunner:
                 contents=messages,
             )
 
-            # response = client.models.generate_content(
-            #     model="gemini-2.5-flash",
-            #     config=types.GenerateContentConfig(
-            #         tools=[self._available_functions],
-            #         system_instruction=self._system_prompt,
-            #     ),
-            #     contents=messages,
-            # )
-
             if response.usage_metadata:
                 total_prompt_tokens += response.usage_metadata.prompt_token_count or 0
 
@@ -144,19 +203,38 @@ class AgentRunner:
                 final_output = response.text or ""
                 break
 
-            # Process function calls
-            from functions.call_function import call_function
+            parallel_calls, sequential_calls = _partition_calls(
+                response.function_calls
+            )
 
-            function_results = []
-            for fc in response.function_calls:
-                total_tool_calls += 1
-                fr = call_function(fc, verbose=self.verbose)
-                function_results.append(fr)
+            all_indexed = []    # (original_index, result)
 
+            # --- parallel group ---
+            with ThreadPoolExecutor() as executor:
+                futures = {
+                    executor.submit(_call_and_validate, fc, self.verbose): i
+                    for i, fc in parallel_calls
+                }
+                for future in as_completed(futures):
+                    try:
+                        all_indexed.append((futures[future], future.result()))
+                    except Exception:
+                        for f in futures:
+                            f.cancel()
+                        raise
+
+            # --- sequential group ---
+            for i, fc in sequential_calls:
+                all_indexed.append((i, _call_and_validate(fc, self.verbose)))
+
+            # Reassemble in original order, then count
+            function_results = [r for _, r in sorted(all_indexed)]
+            total_tool_calls += len(function_results)
+ 
             messages.append(
                 types.Content(role="user", parts=function_results)
             )
-        
+
         return {
             "output": final_output,
             "tool_calls": total_tool_calls,
@@ -244,7 +322,7 @@ def evaluate_scenario(
             scenario_id=scenario.id,
             description=scenario.description,
             passed=passed,
-            tool_calls_made=0,
+            tool_calls_made=tool_calls,
             manual_steps=scenario.manual_steps,
             agent_steps=agent_steps,
             effort_reduction_pct=_effort_reduction(
@@ -252,7 +330,7 @@ def evaluate_scenario(
             duration_seconds=round(elapsed, 2),
             prompt_tokens=result["prompt_tokens"],
             response_tokens=result["response_tokens"],
-            final_output=output[:500], # truncate for report
+            final_output=output[:500],  # truncate for report
             failure_reason=failure_reason,
         )
 
@@ -300,7 +378,7 @@ def print_report(results: list[ScenarioResult]) -> None:
                 f"{r.response_tokens} response"
             )
         if r.failure_reason:
-            print(f"        Failure     : {r.failure_reason} /")
+            print(f"        Failure     : {r.failure_reason}")
 
     print("\n" + "=" * 50 + "\n")
 
@@ -315,7 +393,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--dry-run",
-        actions="store_true",
+        action="store_true",
         help="Validate scenario definitions without calling the API",
     )
     parser.add_argument(
