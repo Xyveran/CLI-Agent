@@ -10,9 +10,9 @@ from google import genai
 from google.genai import types
 from functions.call_function import available_functions, call_function, partition_calls
 from utils.retry import with_backoff
+from utils.api import call_api, call_and_validate
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-_subprocess_semaphore = threading.Semaphore(2)
 
 #
 # Structured run logger
@@ -134,38 +134,13 @@ def parse_arguments():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     return parser.parse_args()
 
-@with_backoff(max_retries=5, base_delay=1.0)
-def _call_api(client, model, config, contents):
-    return client.models.generate_content(
-        model=model,
-        config=config,
-        contents=contents,
-    )
-
-# wrapper for error handling with the ThreadPoolExecutor
-def _call_and_validate(fc, verbose):
-    if fc.name == "run_python_file":
-        with _subprocess_semaphore:
-            response = call_function(fc, verbose)
-    else:
-        response = call_function(fc, verbose)
-
-    if not response.parts:
-        raise Exception("Call function parts list is empty")
-    if not response.parts[0].function_response:
-        raise Exception("No function response object returned")
-    if not response.parts[0].function_response.response:
-        raise Exception("No result from function call")
-    
-    return response
-
 def generate_content(client, messages, verbose, logger: RunLogger, iteration: int):
     """
     Returns (function_response_parts | None, is_done).
     is_done=True when the model produces a text-only final answer.
     """
 
-    response = _call_api(
+    response = call_api(
         client,
         model="gemini-2.5-flash",
         config=types.GenerateContentConfig(
@@ -198,7 +173,7 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
 
     with ThreadPoolExecutor() as executor:
         futures = {
-            executor.submit(_call_and_validate, fc, verbose): i
+            executor.submit(call_and_validate, fc, verbose): i
             for i, fc in parallel_calls
         }
         
@@ -211,7 +186,7 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
                 raise
 
     for i, fc in sequential_calls:
-        all_indexed.append((i, _call_and_validate(fc, verbose)))
+        all_indexed.append((i, call_and_validate(fc, verbose)))
 
     function_results = [r for _, r in sorted(all_indexed)]
 

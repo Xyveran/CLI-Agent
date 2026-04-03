@@ -27,15 +27,15 @@ def with_backoff(
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-
-            for attempt in range(max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except ResourceExhausted as exc:
-                    if attempt == max_retries:
-                        raise   # give up after final attempt
-
-                    delay = min(base_delay * (2 ** attempt), max_delay)
+            # effective_delay = kwargs.pop("_base_delay", base_delay) # runtime override    # This was an option to make base_delay modifiable
+            for attempt in range(max_retries + 1):                                          # from decorated functions. I elected not to, to
+                try:                                                                        # avoid surprises to future callers and reviewers.
+                    return func(*args, **kwargs)                                            # This would be good at scale, if well-documented,
+                except ResourceExhausted as exc:                                            # instead of reconstructing a decorated function 
+                    if attempt == max_retries:                                              # per-call. Currently the complexity doesn't pay
+                        raise   # give up after final attempt                               # for itself.
+                                                                                            #
+                    delay = min(base_delay * (2 ** attempt), max_delay)                     # delay -> effective_delay
 
                     if jitter:
                         delay *= random.uniform(0.5, 1.5)
@@ -46,5 +46,5 @@ def with_backoff(
                     )
 
                     time.sleep(delay)
-            return wrapper
-        return decorator
+        return wrapper
+    return decorator
