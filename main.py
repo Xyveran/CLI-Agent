@@ -8,6 +8,7 @@ from google.genai import types
 from functions.call_function import available_functions, partition_calls
 from utils.api import call_api, call_and_validate
 from utils.logger import RunLogger
+from utils.memory import MemoryStore, MemoryRecord
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
     
@@ -36,12 +37,22 @@ def main():
     if args.verbose:
         print(f"User prompt: {args.user_prompt}\n")
 
+    # should implement a messages deque for better performance when prepending from vector store
     messages = [
         types.Content(
             role="user",
                 parts=[types.Part(text=args.user_prompt)]
         )
     ]
+
+    memory = MemoryStore()
+    past_context = memory.retrieve(args.user_prompt)
+    if past_context:
+        # prepend as a system-level context message
+        messages.insert(0, types.Content(           
+            role="user",
+            parts=[types.Part(text=memory.format_for_prompt(past_context))]
+        ))
 
     completed = False
     
@@ -60,6 +71,15 @@ def main():
 
     logger.finish(completed)
 
+    # add summary generation for outcome data
+
+    if completed:
+        memory.write(MemoryRecord(
+            prompt=args.user_prompt,
+            summary=...,
+            outcome=...,
+        ))
+
     if args.verbose:
         print(f"\nRun log saved to: {logger.path}")
         
@@ -68,6 +88,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Chatbot")
     parser.add_argument("user_prompt", type=str, help="User prompt")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    # add --no-memory to opt out of vector store mem during testing
     return parser.parse_args()
 
 def generate_content(client, messages, verbose, logger: RunLogger, iteration: int):

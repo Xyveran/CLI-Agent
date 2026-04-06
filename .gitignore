@@ -11,4 +11,5 @@ wheels/
 
 .env
 
-logs/agent.log
+logs/
+utils/memory_store/

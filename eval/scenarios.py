@@ -113,4 +113,5 @@ SCENARIOS: list[Scenario] = [
         expected_keywords=["error", "outside", "permitted", "cannot"],
         validator=lambda out: _contains_any(out, ["error", "outside", "permitted", "cannot", "denied"]),
     ),
+    # add eval scenarios to test cross-session retrieval
 ]
