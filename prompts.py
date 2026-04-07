@@ -40,3 +40,16 @@ BEHAVIOR:
 - Avoid unnecessary steps
 - Prioritize correctness over speed
 """
+
+preference_extraction_prompt = """
+You are analyzing a completed agent run to extract durable user preference signals.
+
+Given the user's prompt and the agent's final answer, list any preferences the user demonstrated.
+Things like output style, tool usage habits, file naming conventions, or recurring task patterns.
+
+Return ONLY a JSON array of short preference strings (max 5 items).
+If no clear preferences are evident, return an empty array [].
+
+Example output:
+["prefers verbose tool-call output", "always wants tests run before writing files"]
+"""

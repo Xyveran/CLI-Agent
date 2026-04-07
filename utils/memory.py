@@ -1,11 +1,11 @@
 import os
 import json
+import chromadb
+import chromadb.utils.embedding_functions as embedding_functions
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Optional
-import chromadb
-from chromadb.utils.embedding_functions import GoogleGenerativeAiEmbeddingFunction
-from config import MEMORY_DIR, MEMORY_TOP_K
+from config import MEMORY_DIR
 
 # need to store:
 #  task outcomes, one per completed run
@@ -43,6 +43,7 @@ class PreferenceRecord:
     count: int              # how many runs have reinforced this
 
 # implement with Chromadb
+# https://docs.trychroma.com/integrations/embedding-models/google-gemini
 class MemoryStore:
     """
     Wraps ChromaDB to provide outcome and preference memory
@@ -51,24 +52,71 @@ class MemoryStore:
         - 'preferences' : inferred user behavior patterns
     """
 
-    def __init__(self, api_key: str):
-        self._client
-        self._outcomes
-        self._preferences
+    def __init__(self): # api_key arg not needed
+        self._client = chromadb.PersistentClient(path=MEMORY_DIR)
+        embed_fn = embedding_functions.GoogleGeminiEmbeddingFunction(
+            model_name="gemini-embedding-001",
+            task_type="RETRIEVAL_DOCUMENT",
+            dimension=768,  # range of 128-3072 supported. Lower dimension is sufficient here.
+        )
+        self._outcomes = self._client.get_or_create_collection(
+            name="outcomes",
+            embedding_function=embed_fn,
+        )
+        self._preferences = self._client.get_or_create_collection(
+            name="preferences",
+            embedding_function=embed_fn
+        )
 
     #
     # Write
     #
 
     def write_outcome(self, record: OutcomeRecord) -> None:
-        pass
+        doc_id = f"outcome_{record.timestamp}"
+        self._outcomes.upsert(
+            ids=[doc_id],
+            documents=[record.summary], # what gets embedded and searched
+            metadatas=[asdict(record)],
+        )
 
     def write_preference(self, preference: str) -> None:
         """
-        Insert a preference signal. If a near-duplicate already exists
+        Upsert a preference signal. If a near-duplicate already exists
         (cosine distance < 0.15), increment its count instead of inserting.
         """
-        pass
+        results = self._preferences.query(
+            query_texts=[preference],
+            n_results=1,
+            include=["distances","metadatas"],
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        if results["ids"][0] and results["distances"][0][0] < 0.15:
+            # reinforce existing preference
+            existing = results["metadatas"][0][0]
+            existing_id = results["ids"][0][0]
+            existing["count"] += 1
+            existing["last_reinforced"] = now
+            self._preferences.upsert(
+                ids=[existing_id],
+                documents=[preference],
+                metadatas=[existing],
+            )
+        else:
+            # new preference
+            doc_id = f"pref_{now}"
+            self._preferences.upsert(
+                ids=[doc_id],
+                documents=[preference],
+                metadatas=[{
+                    "preference": preference,
+                    "first_seen": now,
+                    "last_reinforced": now,
+                    "count": 1,
+                }],
+            )
 
     #
     # Retrieve
@@ -95,4 +143,8 @@ class MemoryStore:
         message before the agent loop starts. Returns None if there is
         nothing to inject.
         """
+        pass
+
+    def extract_preferences(client, prompt: str, outcome: str) -> list[str]:
+        """One extra Gemini call per completed run to mine preference signals."""
         pass
