@@ -53,3 +53,11 @@ If no clear preferences are evident, return an empty array [].
 Example output:
 ["prefers verbose tool-call output", "always wants tests run before writing files"]
 """
+
+summarize_run_prompt = """
+Summarize what the agent did to complete this task in 2-3 sentences.
+
+Focus on what files were accessed or modified and what was found or fixed.
+
+Be specific and factual. Return plain text only.
+"""

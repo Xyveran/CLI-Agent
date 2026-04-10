@@ -2,13 +2,14 @@ import os
 import argparse
 import prompts
 import logging
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from functions.call_function import available_functions, partition_calls
 from utils.api import call_api, call_and_validate
 from utils.logger import RunLogger
-from utils.memory import MemoryStore, MemoryRecord
+from utils.memory import MemoryStore, OutcomeRecord, extract_preferences, generate_run_summary
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
     
@@ -38,27 +39,36 @@ def main():
         print(f"User prompt: {args.user_prompt}\n")
 
     # should implement a messages deque for better performance when prepending from vector store
-    messages = [
-        types.Content(
-            role="user",
-                parts=[types.Part(text=args.user_prompt)]
-        )
-    ]
+    # ^ no longer needed: no longer prepending messages. May have also caused Gemini SDK issues.
 
-    memory = MemoryStore()
-    past_context = memory.retrieve(args.user_prompt)
-    if past_context:
-        # prepend as a system-level context message
-        messages.insert(0, types.Content(           
+    memory = MemoryStore()      # always instantiating MemoryStore() prevents future UnboundLocalErrors
+                                # should any memory-related logic be added that runs regardless of the
+                                # --no-memory flag
+    if not args.no_memory:
+        past_outcomes = memory.retrieve_outcome(args.user_prompt)
+        past_prefs = memory.retrieve_preferences()
+        context_msg = memory.format_context_message(past_outcomes, past_prefs)
+    else:
+        context_msg = None
+
+    messages = []
+    if context_msg:
+        messages.append(types.Content(      # append first as user message
             role="user",
-            parts=[types.Part(text=memory.format_for_prompt(past_context))]
+            parts=[types.Part(text=context_msg)]
         ))
+    messages.append(types.Content(
+        role="user",
+        parts=[types.Part(text=args.user_prompt)]
+    ))
 
+    final_answer = ""
+    total_tool_calls = 0
     completed = False
     
     for iteration in range(1, 11):
 
-        function_responses, done = generate_content(
+        function_responses, done, final_answer = generate_content(
             client, messages, args.verbose, logger, iteration
             )
         
@@ -67,18 +77,23 @@ def main():
             break
 
         if function_responses is not None:
+            total_tool_calls += len(function_responses)
             messages.append(types.Content(role="user", parts=function_responses))
 
     logger.finish(completed)
 
-    # add summary generation for outcome data
-
-    if completed:
-        memory.write(MemoryRecord(
+    if completed and not args.no_memory:
+        summary = generate_run_summary(client, args.user_prompt, final_answer)
+        memory.write_outcome(OutcomeRecord(
             prompt=args.user_prompt,
-            summary=...,
-            outcome=...,
+            summary=summary,
+            tool_calls=total_tool_calls,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            run_log_path=logger.path,
         ))
+        preferences = extract_preferences(client, args.user_prompt, final_answer)
+        for pref in preferences:
+            memory.write_preference(pref)
 
     if args.verbose:
         print(f"\nRun log saved to: {logger.path}")
@@ -88,12 +103,12 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Chatbot")
     parser.add_argument("user_prompt", type=str, help="User prompt")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    # add --no-memory to opt out of vector store mem during testing
+    parser.add_argument("--no-memory", action="store_true", help="Disable memory retrieval and writing for this run")
     return parser.parse_args()
 
 def generate_content(client, messages, verbose, logger: RunLogger, iteration: int):
     """
-    Returns (function_response_parts | None, is_done).
+    Returns (function_response_parts | None, is_done, final_answer | None).
     is_done=True when the model produces a text-only final answer.
     """
 
@@ -122,7 +137,7 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
     if not response.function_calls:
         print("Response:")
         print(response.text)
-        return None, True # done, model gave a final text answer
+        return None, True, response.text or "" # done, model gave a final text answer
     
     parallel_calls, sequential_calls = partition_calls(response.function_calls)
 
@@ -162,7 +177,7 @@ def generate_content(client, messages, verbose, logger: RunLogger, iteration: in
             print(f"-> {raw_result}")
     
     logger.log_step(iteration, step_tool_calls)
-    return function_results, False # not done yet
+    return function_results, False, None # not done yet
 
 if __name__ == "__main__":
     main()

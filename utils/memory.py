@@ -5,7 +5,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Optional
 from config import MEMORY_DIR, MEMORY_TOP_K
-from prompts import preference_extraction_prompt
+from prompts import preference_extraction_prompt, summarize_run_prompt
 
 # need to store:
 #  task outcomes, one per completed run
@@ -196,23 +196,42 @@ class MemoryStore:
             + "\n\n[END MEMORY]"
         )
 
-    def extract_preferences(client, prompt: str, outcome: str) -> list[str]:
-        """One extra Gemini call per completed run to mine preference signals."""
-        from google.genai import types as gtypes
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            config=gtypes.GenerateContentConfig(
-                system_instruction=preference_extraction_prompt,
-            ),
-            contents=[
-                gtypes.Content(role="user", parts=[gtypes.Part(text=(
-                    f"User prompt: {prompt}\n\nAgent outcome: {outcome}"
-                ))])
-            ],
-        )
+def extract_preferences(client, prompt: str, outcome: str) -> list[str]:
+    """One extra Gemini call per completed run to mine preference signals."""
+    from google.genai import types as gtypes
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        config=gtypes.GenerateContentConfig(
+            system_instruction=preference_extraction_prompt,
+        ),
+        contents=[
+            gtypes.Content(role="user", parts=[gtypes.Part(text=(
+                f"User prompt: {prompt}\n\nAgent outcome: {outcome}"
+            ))])
+        ],
+    )
 
-        try:
-            raw = response.text.strip().removeprefix("```json").removesuffix("```").strip()
-            return json.loads(raw)
-        except (json.JSONDecodeError, AttributeError):
-            return []
+    try:
+        raw = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+        return json.loads(raw)
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    
+def generate_run_summary(client, prompt: str, outcome: str) -> str:
+    """Summarize what the agent did in a completed run, for memory storage."""
+    from google.genai import types as gtypes
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        config=gtypes.GenerateContentConfig(
+            system_instruction=summarize_run_prompt,
+        ),
+        contents=[
+            gtypes.Content(role="user", parts=[gtypes.Part(text=(
+                f"User prompt: {prompt}\n\nAgent final answer: {outcome}"
+            ))])
+        ],
+    )
+
+    # prompt[:200] fallback to get a non-empty string if the API call fails
+    # ChromaDB requires a non-empty document for embedding
+    return response.text.strip() if response.text else prompt[:200]
