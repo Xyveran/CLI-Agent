@@ -1,6 +1,6 @@
 ## LLM-Powered CLI Automation Agent
 
-> A production-patterned AI agent that used Google Gemini's function-calling API to plan,
+> A production-patterned AI agent that uses Google Gemini's function-calling API to plan,
 > execute, and iterate on multi-step developer tasks entirely from the command line
 
 ---
@@ -31,7 +31,10 @@ python main.py "Summarize every Python file in this project and write the summar
 ```mermaid
 flowchart TD
     A["CLI — main.py
-    argparse · user_prompt · --verbose"]
+    argparse · user_prompt · --verbose · --no-memory"]
+
+    M["MemoryStore
+    ChromaDB · outcomes + preferences"]
 
     B["Gemini 2.5 Flash
     system_instruction + tool schemas"]
@@ -64,10 +67,16 @@ flowchart TD
     K["Append to messages[]
     full history preserved"]
 
+    N["Memory write
+    outcome + preferences"]
+
     A -->|"user prompt"| B
+    A -->|"retrieve context"| M
+    M -->|"inject past outcomes & prefs"| B
     B --> C
     C -->|"text"| D
     C -->|"FunctionCall"| E
+    D -->|"if memory enabled"| N
     E --> F1 & F2 & F3 & F4
     F1 & F2 & F4 --> G
     F3 --> H
@@ -78,7 +87,9 @@ flowchart TD
 ```
 
 The agent loop runs until either the model emits a plain-text final answer (task complete)
-or the 10-iteration cap is reached. Every run is logged to logs/run_<timestamp>.json.
+or the 10-iteration cap is reached. Every run is logged to logs/run_<timestamp>.json. On
+completion, a run summary and any inferred user preferences are written back to the ChromaDB
+memory store and retrieved at the start of future runs.
 
 ---
 
@@ -137,7 +148,7 @@ a corrective action on the next iteration instead of crashing.
 
 ```python
 try:
-    function_result = function_map[function_map](**args)
+    function_result = function_map[function_name](**args)
 except Exception as e:
     function_result = f"Error executing {function_name}: {e}"
 ```
@@ -145,7 +156,15 @@ except Exception as e:
 Unknown function names are caught at the dispatcher level and returned as structured error
 responses, so even a hallucinated tool name doesn't break the loop.
 
----
+#### 5 - Cross-Session Memory
+
+Completed runs are summarized and stored as embeddings in a ChromaDB vector store. On the next run,
+semantically similar past outcomes and accumulated user-preference signals are retrieved and injected
+into the conversation before the agent loop starts. This lets the agent avoid repeating known work and
+adapt to observed user habits over time. Pass --no-memory to skip retrieval and writing for a
+clean, isolated run
+
+--
 
 ### Tool Reference
 
@@ -173,6 +192,12 @@ Each scenario defines:
 - The minimum number of tool calls expected
 - A validator function that checks the final output for correctness
 - A documented manual step count (used to calculate effort reduction)
+
+The suite is split across four modules:
+- scenarios.py defines the benchmark tasks and validators
+- evaluator.py runs each scenario and produces a ScenarioResult dataclass
+- runner.py wraps the agentic loop with parallel tool execution
+- report.py formats the final summary table
 
 #### Sample output:
 
@@ -246,7 +271,7 @@ flowchart LR
     ROOT --> PROMPTS["prompts.py
     system instruction"]
     ROOT --> CONFIG["config.py
-    WORKING_DIR · MAX_CHARS"]
+    WORKING_DIR · MAX_CHARS · MEMORY_DIR · MEMORY_TOP_K"]
     ROOT --> PYPROJECT["pyproject.toml
     deps · uv"]
 
@@ -262,11 +287,33 @@ flowchart LR
     FN --> WF["write_file.py
     write · overwrite"]
 
+    ROOT --> UT["utils/"]
+    UT --> API["api.py
+    call_api · call_and_validate"]
+    UT --> LG2["logger.py
+    RunLogger · JSON run logs"]
+    UT --> RT["retry.py
+    exponential backoff decorator"]
+    UT --> MEM["memory.py
+    MemoryStore · ChromaDB"]
+
     ROOT --> EV["eval/"]
     EV --> SC["scenarios.py
     7 benchmark tasks · validators"]
     EV --> EL["eval.py
-    runner · metrics · JSON report"]
+    CLI entrypoint · argparse"]
+    EV --> EVR["evaluator.py
+    ScenarioResult · evaluate_scenario"]
+    EV --> RN["runner.py
+    AgentRunner · parallel calls"]
+    EV --> RP["report.py
+    print_report · summary table"]
+
+    ROOT --> TS["tests/"]
+    TS --> T1["test_get_file_content.py"]
+    TS --> T2["test_get_files_info.py"]
+    TS --> T3["test_run_python_file.py"]
+    TS --> T4["test_write_file.py"]
 
     ROOT --> LG["logs/
     run_timestamp.json per run"]
@@ -286,9 +333,24 @@ flowchart LR
     style RPF fill:#E1F5EE,stroke:#5DCAA5,color:#085041
     style WF fill:#E1F5EE,stroke:#5DCAA5,color:#085041
 
+    style UT fill:#EEF4FE,stroke:#7AAAE8,color:#0D2B5E
+    style API fill:#EEF4FE,stroke:#7AAAE8,color:#0D2B5E
+    style LG2 fill:#EEF4FE,stroke:#7AAAE8,color:#0D2B5E
+    style RT fill:#EEF4FE,stroke:#7AAAE8,color:#0D2B5E
+    style MEM fill:#EEF4FE,stroke:#7AAAE8,color:#0D2B5E
+
     style EV fill:#FAEEDA,stroke:#EF9F27,color:#633806
     style SC fill:#FAEEDA,stroke:#EF9F27,color:#633806
     style EL fill:#FAEEDA,stroke:#EF9F27,color:#633806
+    style EVR fill:#FAEEDA,stroke:#EF9F27,color:#633806
+    style RN fill:#FAEEDA,stroke:#EF9F27,color:#633806
+    style RP fill:#FAEEDA,stroke:#EF9F27,color:#633806
+
+    style TS fill:#FEF0EE,stroke:#E87A6A,color:#5E1A0D
+    style T1 fill:#FEF0EE,stroke:#E87A6A,color:#5E1A0D
+    style T2 fill:#FEF0EE,stroke:#E87A6A,color:#5E1A0D
+    style T3 fill:#FEF0EE,stroke:#E87A6A,color:#5E1A0D
+    style T4 fill:#FEF0EE,stroke:#E87A6A,color:#5E1A0D
 
     style LG fill:#F1EFE8,stroke:#B4B2A9,color:#444441
     style CA fill:#F1EFE8,stroke:#B4B2A9,color:#444441
@@ -311,6 +373,9 @@ python main.py "List all files and tell me what this project does"
 # Run with verbose tool-call tracing
 python main.py "Find and fix any bugs in calculator/main.py" --verbose
 
+# Skip memory retrieval and writing for a clean run
+python main.py "List all files and tell me what this project does" --no-memory
+
 # Run the eval suite
 python eval/eval.py --report results.json
 ```
@@ -326,6 +391,7 @@ python eval/eval.py --report results.json
 | LLM Client | google-genai SDK |
 | Tool Contracts | Gemini FunctionDeclaration + types.Schema |
 | Subprocess Execution | Python subprocess with timeout + pipe capture |
+| Memory / Vector Store | ChromaDB + Gemini Embeddings (gemini-embedding-001) |
 | Package Manager | uv |
 | Config | python-dotenv |
 | Eval | Custom benchmark runner (eval/) |
@@ -338,13 +404,12 @@ python eval/eval.py --report results.json
 - Stateful conversation management: full message history threaded through every API call
 - Sandboxed code execution: subprocess isolation with path guards and timeouts
 - Prompt engineering: system prompt designed to enforce tool-use discipline and step-by-step decomposition
+- Parellel tool execution: independent function call dispatched concurrently via ThreadPoolExecutor
+- Cross-session memory: ChromaDB vector store persists run summaries and user preferences across sessions
 - Evaluation-driven development: behaviour measured against defined scenarios, not eyeballed
 
 #### Roadmap
 
-- Retry logic with exponential backoff on tool failures
-- Parallel tool execution for independent sub-tasks
-- Long-term memory via vector store for multi-session workflows
 - Web search and HTTP request tools
 - Streaming output for long-running tasks
 - GitHub Actions integration for CI-triggered agent runs
