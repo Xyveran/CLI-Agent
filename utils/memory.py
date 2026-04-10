@@ -1,11 +1,11 @@
-import os
 import json
 import chromadb
 import chromadb.utils.embedding_functions as embedding_functions
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Optional
-from config import MEMORY_DIR
+from config import MEMORY_DIR, MEMORY_TOP_K
+from prompts import preference_extraction_prompt
 
 # need to store:
 #  task outcomes, one per completed run
@@ -123,11 +123,38 @@ class MemoryStore:
     #
 
     def retrieve_outcome(self, query: str) -> list[dict]:
-        pass
+        if self._outcomes.count() == 0:
+            return []
+        
+        results = self._outcomes.query(
+            query_texts=[query],
+            n_results=min(MEMORY_TOP_K, self._outcomes.count()),
+            include=["documents", "metadatas", "distances"],
+        )
+
+        return [
+            {"summary": doc, "meta": meta, "distance": dist}
+            for doc, meta, dist
+            in zip(
+                results["documents"][0],
+                results["metadatas"][0],
+                results["distances"][0],
+            )
+            if dist < 0.7   # filter out low-relevance results
+        ]
 
     def retrieve_preferences(self) -> list[dict]:
         """Returns all preferences sorted by reinforcement count."""
-        pass
+        if self._preferences.count() == 0:
+            return []
+        
+        results = self._preferences.get(include=["metadatas"])
+
+        return sorted(
+            results["metadatas"],
+            key=lambda x: x["count"],
+            reverse=True,
+        )
 
     #
     # Format for injection
@@ -143,8 +170,49 @@ class MemoryStore:
         message before the agent loop starts. Returns None if there is
         nothing to inject.
         """
-        pass
+        parts = []
+
+        if preferences:
+            pref_lines = "\n".join(
+                f"- {p['preference']} (seen {p['count']} time(s))"
+                for p in preferences[:5]    # cap at 5 most reinforced
+            )
+            parts.append(f"[USER PREFERENCES - learned from past sessions]\n{pref_lines}")
+
+        if outcomes:
+            outcome_lines = "\n".join(
+                f"Task ({o['meta']['timestamp'][:10]}): {o['summary']}"
+                for o in outcomes
+            )
+            parts.append(f"[RELEVANT PAST RUNS]\n{outcome_lines}")
+        
+        if not parts:
+            return None
+        
+        return (
+            "[MEMORY - retrieved from past sessions."
+            "Use this to avoid repeating known work and to respect user preferences.]\n\n"
+            + "\n\n".join(parts)
+            + "\n\n[END MEMORY]"
+        )
 
     def extract_preferences(client, prompt: str, outcome: str) -> list[str]:
         """One extra Gemini call per completed run to mine preference signals."""
-        pass
+        from google.genai import types as gtypes
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            config=gtypes.GenerateContentConfig(
+                system_instruction=preference_extraction_prompt,
+            ),
+            contents=[
+                gtypes.Content(role="user", parts=[gtypes.Part(text=(
+                    f"User prompt: {prompt}\n\nAgent outcome: {outcome}"
+                ))])
+            ],
+        )
+
+        try:
+            raw = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+            return json.loads(raw)
+        except (json.JSONDecodeError, AttributeError):
+            return []
