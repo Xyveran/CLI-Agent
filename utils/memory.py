@@ -1,4 +1,5 @@
 import json
+import logging
 import chromadb
 import chromadb.utils.embedding_functions as embedding_functions
 from dataclasses import dataclass, asdict
@@ -7,6 +8,7 @@ from typing import Optional
 from config import MEMORY_DIR, MEMORY_TOP_K
 from prompts import preference_extraction_prompt, summarize_run_prompt
 
+logger = logging.getLogger(__name__)
 # need to store:
 #  task outcomes, one per completed run
 #   query vector -> embedding of user prompt
@@ -31,7 +33,7 @@ from prompts import preference_extraction_prompt, summarize_run_prompt
 class OutcomeRecord:
     prompt: str
     summary: str
-    tool_calls: str
+    tool_calls: int #####
     timestamp: str
     run_log_path: str
 
@@ -199,17 +201,22 @@ class MemoryStore:
 def extract_preferences(client, prompt: str, outcome: str) -> list[str]:
     """One extra Gemini call per completed run to mine preference signals."""
     from google.genai import types as gtypes
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        config=gtypes.GenerateContentConfig(
-            system_instruction=preference_extraction_prompt,
-        ),
-        contents=[
-            gtypes.Content(role="user", parts=[gtypes.Part(text=(
-                f"User prompt: {prompt}\n\nAgent outcome: {outcome}"
-            ))])
-        ],
-    )
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            config=gtypes.GenerateContentConfig(
+                system_instruction=preference_extraction_prompt,
+            ),
+            contents=[
+                gtypes.Content(role="user", parts=[gtypes.Part(text=(
+                    f"User prompt: {prompt}\n\nAgent outcome: {outcome}"
+                ))])
+            ],
+        )
+    except Exception as e:
+        logger.warning("extract_preferences failed: %s", e)
+        return []
 
     try:
         raw = response.text.strip().removeprefix("```json").removesuffix("```").strip()
@@ -220,18 +227,22 @@ def extract_preferences(client, prompt: str, outcome: str) -> list[str]:
 def generate_run_summary(client, prompt: str, outcome: str) -> str:
     """Summarize what the agent did in a completed run, for memory storage."""
     from google.genai import types as gtypes
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        config=gtypes.GenerateContentConfig(
-            system_instruction=summarize_run_prompt,
-        ),
-        contents=[
-            gtypes.Content(role="user", parts=[gtypes.Part(text=(
-                f"User prompt: {prompt}\n\nAgent final answer: {outcome}"
-            ))])
-        ],
-    )
 
-    # prompt[:200] fallback to get a non-empty string if the API call fails
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            config=gtypes.GenerateContentConfig(
+                system_instruction=summarize_run_prompt,
+            ),
+            contents=[
+                gtypes.Content(role="user", parts=[gtypes.Part(text=(
+                    f"User prompt: {prompt}\n\nAgent final answer: {outcome}"
+                ))])
+            ],
+        )
+    except Exception as e:
+        logger.warning("generate_run_summary failed: %s", e)
+        return prompt[:200] # fallback to get a non-empty string if the API call fails
+    
     # ChromaDB requires a non-empty document for embedding
     return response.text.strip() if response.text else prompt[:200]

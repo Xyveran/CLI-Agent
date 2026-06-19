@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def main():
     args = parse_arguments()
+    os.makedirs("logs", exist_ok=True)
     logging.basicConfig(            # no-op if the root logger already has handlers, potential issue
         filename="logs/agent.log",  # if a testing framework or library configures logging
         level=logging.WARNING,      # before main() runs
@@ -34,6 +35,10 @@ def main():
 
     logger = RunLogger()
     logger.set_prompt(args.user_prompt)
+
+    if args.working_dir:
+        import config
+        config.WORKING_DIR = args.working_dir
 
     if args.verbose:
         print(f"User prompt: {args.user_prompt}\n")
@@ -78,7 +83,7 @@ def main():
 
         if function_responses is not None:
             total_tool_calls += len(function_responses)
-            messages.append(types.Content(role="user", parts=function_responses))
+            messages.extend(function_responses) #####
 
     logger.finish(completed)
 
@@ -104,6 +109,7 @@ def parse_arguments():
     parser.add_argument("user_prompt", type=str, help="User prompt")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--no-memory", action="store_true", help="Disable memory retrieval and writing for this run")
+    parser.add_argument("--working-dir", default=None, help="Override the working directory")
     return parser.parse_args()
 
 def generate_content(client, messages, verbose, logger: RunLogger, iteration: int):

@@ -137,7 +137,7 @@ def _partition_calls(function_calls):
         - Any write where the target path was already seen as a write target
         - Any read where the target path is already a pending write target
         
-    Returns a list of (original_indrx, fc) tuples for both groups so that
+    Returns a list of (original_index, fc) tuples for both groups so that
     results can be reassembled in original order after execution.
     """
     write_paths = set()

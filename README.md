@@ -11,7 +11,7 @@ Most LLM demos stop at generating text. This agent **acts**. Give it a
 natural-language task and it will:
 
 1. Decide which tools to invoke and in what order
-2. Execute those tools against a readl filesystem and Python runtime
+2. Execute those tools against a real filesystem and Python runtime
 3. Inspect the results and decide whether the task is complete or whether to keep going
 4. Loop (up to 10 iterations) until it can produce a verified, grounded answer
 
@@ -126,7 +126,7 @@ schema_run_python_file = types.FunctionDeclaration(
 
 #### 3 - Defense-in-Depth for File Operations
 
-Every file tool independently validates paths before touching the filesystme. There is
+Every file tool independently validates paths before touching the filesystem. There is
 no global allow-list to bypass:
 
 ```python
@@ -404,7 +404,7 @@ python eval/eval.py --report results.json
 - Stateful conversation management: full message history threaded through every API call
 - Sandboxed code execution: subprocess isolation with path guards and timeouts
 - Prompt engineering: system prompt designed to enforce tool-use discipline and step-by-step decomposition
-- Parellel tool execution: independent function call dispatched concurrently via ThreadPoolExecutor
+- Parallel tool execution: independent function call dispatched concurrently via ThreadPoolExecutor
 - Cross-session memory: ChromaDB vector store persists run summaries and user preferences across sessions
 - Evaluation-driven development: behaviour measured against defined scenarios, not eyeballed
 

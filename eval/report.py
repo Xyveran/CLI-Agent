@@ -28,18 +28,18 @@ def print_report(results: list[ScenarioResult]) -> None:
         print(
             f"\n [{r.scenario_id}] {status} - {r.description}"
         )
-        print(f"        Tool cals   : {r.tool_calls_made}")
+        print(f" Tool calls   : {r.tool_calls_made}")
         print(
-            f"      Effort saved : {r.manual_steps} manual steps -> "
+            f" Effort saved : {r.manual_steps} manual steps -> "
             f"{r.agent_steps} agent step ({r.effort_reduction_pct}% reduction)"
         )
-        print(f"        Duraton     : {r.duration_seconds}s")
+        print(f" Duraton      : {r.duration_seconds}s")
         if r.prompt_tokens:
             print(
-                f"      Tokens      : {r.prompt_tokens} prompt /"
+                f" Tokens       : {r.prompt_tokens} prompt /"
                 f"{r.response_tokens} response"
             )
         if r.failure_reason:
-            print(f"        Failure     : {r.failure_reason}")
+            print(f" Failure      : {r.failure_reason}")
 
     print("\n" + "=" * 50 + "\n")

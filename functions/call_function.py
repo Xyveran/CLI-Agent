@@ -1,8 +1,8 @@
+import config
 from .get_files_info import schema_get_files_info, get_files_info
 from .get_file_content import schema_get_file_content, get_file_content
 from .run_python_file import schema_run_python_file, run_python_file
 from .write_file import schema_write_file, write_file
-from config import WORKING_DIR
 from google.genai import types
 
 
@@ -44,7 +44,7 @@ def call_function(function_call: types.FunctionCall, verbose=False):
     
     args = dict(function_call.args) if function_call.args else {}
 
-    args["working_directory"] = WORKING_DIR
+    args["working_directory"] = config.WORKING_DIR
     
     try:
         function_result = function_map[function_name](**args)
